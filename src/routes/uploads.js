@@ -1,16 +1,19 @@
 const router  = require('express').Router();
 const multer  = require('multer');
 const path    = require('path');
+const fs      = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../db/pool');
 const { requireAuth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { createClient } = require('@supabase/supabase-js');
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+const uploadDir = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadDir),
+  filename:    (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+});
 
 const ALLOWED = [
   'image/jpeg','image/png','image/gif','image/webp',
@@ -19,7 +22,7 @@ const ALLOWED = [
 ];
 
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage,
   limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const mimeBase = file.mimetype.split(';')[0].trim();
@@ -35,30 +38,13 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req, re
   if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
   const { messageId } = req.body;
-  const ext = path.extname(req.file.originalname);
-  const filename = `${uuidv4()}${ext}`;
-
-  // Upload to Supabase Storage
-  const { data, error } = await supabase.storage
-    .from('uploads')
-    .upload(filename, req.file.buffer, {
-      contentType: req.file.mimetype,
-      upsert: false,
-    });
-
-  if (error) {
-    console.error('Supabase upload error:', error);
-    return res.status(500).json({ error: 'File upload failed' });
-  }
-
-  // Get public URL
-  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/uploads/${filename}`;
+  const url = `${process.env.BACKEND_URL || 'https://nexus-chat-bxfz.onrender.com'}/uploads/${req.file.filename}`;
 
   if (messageId) {
     await query(
       `INSERT INTO attachments (message_id, filename, mime_type, size_bytes, s3_key, url)
        VALUES ($1,$2,$3,$4,$5,$6)`,
-      [messageId, req.file.originalname, req.file.mimetype, req.file.size, filename, publicUrl]
+      [messageId, req.file.originalname, req.file.mimetype, req.file.size, url, url]
     );
   }
 
@@ -68,7 +54,7 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req, re
       filename: req.file.originalname,
       mimeType: req.file.mimetype,
       sizeBytes: req.file.size,
-      url: publicUrl,
+      url,
     },
   });
 }));
