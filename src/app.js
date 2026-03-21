@@ -20,7 +20,15 @@ const app = express();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    const allowed = [
+      'http://localhost:3000',
+      'https://spontaneous-sorbet-ff9583.netlify.app',
+      process.env.CLIENT_URL,
+    ].filter(Boolean);
+    if (!origin || allowed.includes(origin)) callback(null, true);
+    else callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
 app.use(rateLimit({
