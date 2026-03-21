@@ -17,7 +17,14 @@ router.get('/', requireAuth, asyncHandler(async (req, res) => {
               JOIN users u ON u.id = rm2.user_id
               WHERE rm2.room_id = r.id AND rm2.user_id != $1
               LIMIT 1
-            ) ELSE r.name END AS name
+            ) ELSE r.name END AS name,
+            CASE WHEN r.type='dm' THEN (
+              SELECT u.avatar_url
+              FROM room_members rm2
+              JOIN users u ON u.id = rm2.user_id
+              WHERE rm2.room_id = r.id AND rm2.user_id != $1
+              LIMIT 1
+            ) ELSE NULL END AS dm_avatar_url
      FROM rooms r
      JOIN room_members rm ON rm.room_id = r.id
      WHERE rm.user_id = $1
@@ -62,13 +69,11 @@ router.post('/dm/:targetUserId', requireAuth, asyncHandler(async (req, res) => {
   if (myId === targetId)
     return res.status(400).json({ error: 'Cannot DM yourself' });
 
-  // Check target user exists
   const { rows: [target] } = await query(
     'SELECT id, username, display_name FROM users WHERE id=$1', [targetId]
   );
   if (!target) return res.status(404).json({ error: 'User not found' });
 
-  // Check if DM room already exists between these two users
   const { rows: [existing] } = await query(
     `SELECT r.* FROM rooms r
      JOIN room_members rm1 ON rm1.room_id = r.id AND rm1.user_id = $1
@@ -80,7 +85,6 @@ router.post('/dm/:targetUserId', requireAuth, asyncHandler(async (req, res) => {
 
   if (existing) return res.json({ room: existing });
 
-  // Create new DM room with short slug
   const slug = `dm-${[myId, targetId].sort().map(id => id.slice(0,8)).join('-')}`;
 
   const { rows: [room] } = await query(
@@ -89,7 +93,6 @@ router.post('/dm/:targetUserId', requireAuth, asyncHandler(async (req, res) => {
     [target.display_name || target.username, slug, myId]
   );
 
-  // Add both users
   await query(
     'INSERT INTO room_members (room_id, user_id) VALUES ($1,$2),($1,$3)',
     [room.id, myId, targetId]
