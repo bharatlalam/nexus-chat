@@ -38,7 +38,7 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req, re
   if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
   const { messageId } = req.body;
-  const url = `${process.env.BACKEND_URL || 'https://nexus-chat-bxfz.onrender.com'}/uploads/${req.file.filename}`;
+  const url = `/uploads/${req.file.filename}`;
 
   if (messageId) {
     await query(
