@@ -10,7 +10,14 @@ router.get('/', requireAuth, asyncHandler(async (req, res) => {
             (SELECT content FROM messages WHERE room_id=r.id AND deleted_at IS NULL
              ORDER BY created_at DESC LIMIT 1) AS last_message,
             (SELECT created_at FROM messages WHERE room_id=r.id AND deleted_at IS NULL
-             ORDER BY created_at DESC LIMIT 1) AS last_message_at
+             ORDER BY created_at DESC LIMIT 1) AS last_message_at,
+            CASE WHEN r.type='dm' THEN (
+              SELECT u.display_name
+              FROM room_members rm2
+              JOIN users u ON u.id = rm2.user_id
+              WHERE rm2.room_id = r.id AND rm2.user_id != $1
+              LIMIT 1
+            ) ELSE r.name END AS name
      FROM rooms r
      JOIN room_members rm ON rm.room_id = r.id
      WHERE rm.user_id = $1
