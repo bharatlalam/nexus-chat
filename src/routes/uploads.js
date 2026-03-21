@@ -52,9 +52,7 @@ router.post('/', requireAuth, upload.single('file'), asyncHandler(async (req, re
   }
 
   // Get public URL
-  const { data: { publicUrl } } = supabase.storage
-    .from('uploads')
-    .getPublicUrl(filename);
+  const publicUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/uploads/${filename}`;
 
   if (messageId) {
     await query(
