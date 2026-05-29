@@ -71,12 +71,27 @@ function initSocket(server) {
           [msgId, roomId, user.id, content.trim(), contentType, replyTo || null]
         );
 
+        // Fetch reply_to_msg if exists
+        let replyToMsg = null;
+        if (msg.reply_to) {
+          const { rows: [replyMsg] } = await query(
+            `SELECT m.id, m.content, u.username,
+                    json_build_object('id', u.id, 'display_name', u.display_name, 'avatar_url', u.avatar_url) AS sender
+             FROM messages m
+             LEFT JOIN users u ON u.id = m.sender_id
+             WHERE m.id = $1`,
+            [msg.reply_to]
+          );
+          replyToMsg = replyMsg || null;
+        }
+
         io.to(`room:${roomId}`).emit('message:new', {
           ...msg,
           sender: {
             id: user.id, username: user.username,
             displayName: user.display_name, avatarUrl: user.avatar_url,
           },
+          reply_to_msg: replyToMsg,
         });
         if (ack) ack({ ok: true, messageId: msgId });
 
