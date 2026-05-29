@@ -41,6 +41,8 @@ app.use('/api/users',    userRoutes);
 app.use('/api/rooms',    roomRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/uploads',  uploadRoutes);
+const pinRoutes = require('./routes/pins');
+app.use('/api/pins', pinRoutes);
 app.use('/api/follows',  followRoutes);
 app.use('/api/admin',    adminRoutes);
 app.use('/api/stories',  storiesRoutes);
