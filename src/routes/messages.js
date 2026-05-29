@@ -7,35 +7,45 @@ router.get('/room/:roomId', requireAuth, asyncHandler(async (req, res) => {
   const { roomId } = req.params;
   const limit  = Math.min(parseInt(req.query.limit) || 50, 100);
   const before = req.query.before;
-
   const { rows: [member] } = await query(
     'SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, req.user.userId]
   );
   if (!member) return res.status(403).json({ error: 'Access denied' });
-
   const params = [roomId, limit + 1];
   let where = 'WHERE m.room_id=$1 AND m.deleted_at IS NULL';
   if (before) { where += ' AND m.created_at < $3'; params.push(before); }
-
   const { rows } = await query(
     `SELECT m.*,
             u.username, u.display_name, u.avatar_url,
             COALESCE(
               json_agg(json_build_object('emoji', r.emoji, 'count', r.cnt))
               FILTER (WHERE r.emoji IS NOT NULL), '[]'
-            ) AS reactions
+            ) AS reactions,
+            CASE WHEN m.reply_to IS NOT NULL THEN
+              json_build_object(
+                'id', rm2.id,
+                'content', rm2.content,
+                'username', ru.username,
+                'sender', json_build_object(
+                  'id', ru.id,
+                  'display_name', ru.display_name,
+                  'avatar_url', ru.avatar_url
+                )
+              )
+            ELSE NULL END AS reply_to_msg
      FROM messages m
      LEFT JOIN users u ON u.id = m.sender_id
+     LEFT JOIN messages rm2 ON rm2.id = m.reply_to
+     LEFT JOIN users ru ON ru.id = rm2.sender_id
      LEFT JOIN (
        SELECT message_id, emoji, COUNT(*) AS cnt
        FROM reactions GROUP BY message_id, emoji
      ) r ON r.message_id = m.id
      ${where}
-     GROUP BY m.id, u.id
+     GROUP BY m.id, u.id, rm2.id, rm2.content, ru.id, ru.username, ru.display_name, ru.avatar_url
      ORDER BY m.created_at DESC LIMIT $2`,
     params
   );
-
   const hasMore = rows.length > limit;
   if (hasMore) rows.pop();
   rows.reverse();
