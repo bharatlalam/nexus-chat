@@ -11,9 +11,9 @@ router.get('/room/:roomId', requireAuth, asyncHandler(async (req, res) => {
     'SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2', [roomId, req.user.userId]
   );
   if (!member) return res.status(403).json({ error: 'Access denied' });
-  const params = [roomId, limit + 1];
-  let where = 'WHERE m.room_id=$1 AND m.deleted_at IS NULL';
-  if (before) { where += ' AND m.created_at < $3'; params.push(before); }
+  const params = [roomId, limit + 1, req.user.userId];
+  let where = 'WHERE m.room_id=$1 AND m.deleted_at IS NULL AND (m.is_private = FALSE OR m.private_user_id = $3)';
+  if (before) { where += ' AND m.created_at < $4'; params.push(before); }
   const { rows } = await query(
     `SELECT m.*,
             u.username, u.display_name, u.avatar_url,
