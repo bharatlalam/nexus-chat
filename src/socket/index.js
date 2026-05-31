@@ -44,6 +44,9 @@ function initSocket(server) {
     const user = socket.user;
     logger.info(`Socket connected: ${user.username} (${socket.id})`);
 
+    // Store socket id per user for private messages
+    socket.join(`user:${user.id}`);
+
     await setUserOnline(user.id);
     socket.broadcast.emit('user:online', { userId: user.id });
 
@@ -54,7 +57,7 @@ function initSocket(server) {
 
     socket.on('message:send', async (data, ack) => {
       try {
-        const { roomId, content, contentType = 'text', replyTo } = data;
+        const { roomId, content, contentType = 'text', replyTo, isPrivateAI = false } = data;
         if (!roomId || !content?.trim()) return;
 
         const { rows: mem } = await query(
@@ -66,9 +69,9 @@ function initSocket(server) {
         const msgId = uuidv4();
         const { rows: [msg] } = await query(
           `INSERT INTO messages
-             (id, room_id, sender_id, sender_type, content, content_type, reply_to)
-           VALUES ($1,$2,$3,'human',$4,$5,$6) RETURNING *`,
-          [msgId, roomId, user.id, content.trim(), contentType, replyTo || null]
+             (id, room_id, sender_id, sender_type, content, content_type, reply_to, is_private, private_user_id)
+           VALUES ($1,$2,$3,'human',$4,$5,$6,$7,$8) RETURNING *`,
+          [msgId, roomId, user.id, content.trim(), contentType, replyTo || null, isPrivateAI, isPrivateAI ? user.id : null]
         );
 
         // Fetch reply_to_msg if exists
@@ -85,17 +88,27 @@ function initSocket(server) {
           replyToMsg = replyMsg || null;
         }
 
-        io.to(`room:${roomId}`).emit('message:new', {
+        const msgPayload = {
           ...msg,
           sender: {
             id: user.id, username: user.username,
             displayName: user.display_name, avatarUrl: user.avatar_url,
           },
           reply_to_msg: replyToMsg,
-        });
+        };
+
+        // If private AI mode, only emit to sender
+        if (isPrivateAI) {
+          socket.emit('message:new', msgPayload);
+        } else {
+          io.to(`room:${roomId}`).emit('message:new', msgPayload);
+        }
+
         if (ack) ack({ ok: true, messageId: msgId });
 
-        if (shouldTriggerAI(content)) handleAIResponse(roomId, content, msgId);
+        if (shouldTriggerAI(content)) {
+          handleAIResponse(roomId, content, msgId, isPrivateAI, user.id, socket);
+        }
       } catch (err) {
         logger.error('message:send error', err);
         socket.emit('error', { message: 'Failed to send message' });
@@ -195,27 +208,47 @@ function initSocket(server) {
   return io;
 }
 
-async function handleAIResponse(roomId, userMessage, triggerMsgId) {
+async function handleAIResponse(roomId, userMessage, triggerMsgId, isPrivate, userId, senderSocket) {
   const aiMsgId = uuidv4();
-  io.to(`room:${roomId}`).emit('ai:typing', { roomId, messageId: aiMsgId });
+
+  // Only show AI typing to sender if private
+  if (isPrivate) {
+    senderSocket.emit('ai:typing', { roomId, messageId: aiMsgId });
+  } else {
+    io.to(`room:${roomId}`).emit('ai:typing', { roomId, messageId: aiMsgId });
+  }
+
   let fullContent = '';
   try {
     await streamAIReply(roomId, userMessage, (chunk) => {
       fullContent += chunk;
-      io.to(`room:${roomId}`).emit('ai:chunk', { messageId: aiMsgId, chunk, roomId });
+      if (isPrivate) {
+        senderSocket.emit('ai:chunk', { messageId: aiMsgId, chunk, roomId });
+      } else {
+        io.to(`room:${roomId}`).emit('ai:chunk', { messageId: aiMsgId, chunk, roomId });
+      }
     });
+
     await query(
-      `INSERT INTO messages (id, room_id, sender_id, sender_type, content, content_type, reply_to)
-       VALUES ($1,$2,NULL,'ai',$3,'text',$4)`,
-      [aiMsgId, roomId, fullContent, triggerMsgId]
+      `INSERT INTO messages (id, room_id, sender_id, sender_type, content, content_type, reply_to, is_private, private_user_id)
+       VALUES ($1,$2,NULL,'ai',$3,'text',$4,$5,$6)`,
+      [aiMsgId, roomId, fullContent, triggerMsgId, isPrivate, isPrivate ? userId : null]
     );
-    io.to(`room:${roomId}`).emit('ai:done', {
+
+    const aiDonePayload = {
       messageId: aiMsgId, roomId,
-      content: fullContent, replyTo: triggerMsgId, createdAt: new Date(),
-    });
+      content: fullContent, replyTo: triggerMsgId,
+      createdAt: new Date(), isPrivate,
+    };
+
+    if (isPrivate) {
+      senderSocket.emit('ai:done', aiDonePayload);
+    } else {
+      io.to(`room:${roomId}`).emit('ai:done', aiDonePayload);
+    }
   } catch (err) {
     logger.error('AI response error:', err);
-    io.to(`room:${roomId}`).emit('ai:error', { roomId, error: 'Aria ran into a problem.' });
+    senderSocket.emit('ai:error', { roomId, error: 'Aria ran into a problem.' });
   }
 }
 
