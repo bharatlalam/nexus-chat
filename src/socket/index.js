@@ -44,7 +44,6 @@ function initSocket(server) {
     const user = socket.user;
     logger.info(`Socket connected: ${user.username} (${socket.id})`);
 
-    // Store socket id per user for private messages
     socket.join(`user:${user.id}`);
 
     await setUserOnline(user.id);
@@ -74,7 +73,6 @@ function initSocket(server) {
           [msgId, roomId, user.id, content.trim(), contentType, replyTo || null, isPrivateAI, isPrivateAI ? user.id : null]
         );
 
-        // Fetch reply_to_msg if exists
         let replyToMsg = null;
         if (msg.reply_to) {
           const { rows: [replyMsg] } = await query(
@@ -97,7 +95,6 @@ function initSocket(server) {
           reply_to_msg: replyToMsg,
         };
 
-        // If private AI mode, only emit to sender
         if (isPrivateAI) {
           socket.emit('message:new', msgPayload);
         } else {
@@ -211,7 +208,6 @@ function initSocket(server) {
 async function handleAIResponse(roomId, userMessage, triggerMsgId, isPrivate, userId, senderSocket) {
   const aiMsgId = uuidv4();
 
-  // Only show AI typing to sender if private
   if (isPrivate) {
     senderSocket.emit('ai:typing', { roomId, messageId: aiMsgId });
   } else {
@@ -239,6 +235,7 @@ async function handleAIResponse(roomId, userMessage, triggerMsgId, isPrivate, us
       messageId: aiMsgId, roomId,
       content: fullContent, replyTo: triggerMsgId,
       createdAt: new Date(), isPrivate,
+      private_user_id: isPrivate ? userId : null,
     };
 
     if (isPrivate) {
