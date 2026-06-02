@@ -52,6 +52,52 @@ router.get('/room/:roomId', requireAuth, asyncHandler(async (req, res) => {
   res.json({ messages: rows, hasMore, nextCursor: hasMore ? rows[0]?.created_at : null });
 }));
 
+// CLEAR CHAT — delete all messages in a room for the requesting user
+router.delete('/room/:roomId/clear', requireAuth, asyncHandler(async (req, res) => {
+  const { roomId } = req.params;
+  const { rows: [member] } = await query(
+    'SELECT 1 FROM room_members WHERE room_id=$1 AND user_id=$2',
+    [roomId, req.user.userId]
+  );
+  if (!member) return res.status(403).json({ error: 'Access denied' });
+
+  await query(
+    `UPDATE messages SET deleted_at=NOW()
+     WHERE room_id=$1 AND deleted_at IS NULL`,
+    [roomId]
+  );
+  res.json({ ok: true });
+}));
+
+// VIEW ONE-TIME IMAGE — mark as viewed and return url
+router.post('/:id/view-once', requireAuth, asyncHandler(async (req, res) => {
+  const { rows: [msg] } = await query(
+    `SELECT m.* FROM messages m
+     JOIN room_members rm ON rm.room_id = m.room_id AND rm.user_id = $2
+     WHERE m.id = $1 AND m.deleted_at IS NULL`,
+    [req.params.id, req.user.userId]
+  );
+  if (!msg) return res.status(404).json({ error: 'Message not found' });
+
+  // If already viewed, delete it
+  if (msg.view_once_viewed) {
+    await query(
+      'UPDATE messages SET deleted_at=NOW() WHERE id=$1',
+      [req.params.id]
+    );
+    return res.status(410).json({ error: 'Image already viewed' });
+  }
+
+  // Mark as viewed
+  await query(
+    'UPDATE messages SET view_once_viewed=TRUE WHERE id=$1',
+    [req.params.id]
+  );
+
+  const imageUrl = msg.content.replace('[ONCE]:', '');
+  res.json({ ok: true, url: imageUrl });
+}));
+
 router.get('/search', requireAuth, asyncHandler(async (req, res) => {
   const { q, roomId } = req.query;
   if (!q?.trim()) return res.status(400).json({ error: 'Query required' });

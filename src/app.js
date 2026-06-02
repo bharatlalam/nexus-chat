@@ -14,13 +14,22 @@ const uploadRoutes  = require('./routes/uploads');
 const followRoutes  = require('./routes/follows');
 const adminRoutes   = require('./routes/admin');
 const storiesRoutes = require('./routes/stories');
+const pinRoutes     = require('./routes/pins');
 const { errorHandler } = require('./middleware/errorHandler');
 
 const app = express();
 
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
-  origin: process.env.CLIENT_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    const allowed = [
+      'http://localhost:3000',
+      'https://spontaneous-sorbet-ff9583.netlify.app',
+      process.env.CLIENT_URL,
+    ].filter(Boolean);
+    if (!origin || allowed.includes(origin)) callback(null, true);
+    else callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
 }));
 app.use(rateLimit({
@@ -41,8 +50,7 @@ app.use('/api/users',    userRoutes);
 app.use('/api/rooms',    roomRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/uploads',  uploadRoutes);
-const pinRoutes = require('./routes/pins');
-app.use('/api/pins', pinRoutes);
+app.use('/api/pins',     pinRoutes);
 app.use('/api/follows',  followRoutes);
 app.use('/api/admin',    adminRoutes);
 app.use('/api/stories',  storiesRoutes);
