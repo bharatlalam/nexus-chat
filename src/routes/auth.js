@@ -1,3 +1,5 @@
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
