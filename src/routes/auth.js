@@ -3,27 +3,13 @@ dns.setDefaultResultOrder('ipv4first');
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
+const { Resend } = require('resend');
 const { query } = require('../db/pool');
 const { signToken, signRefreshToken, verifyRefreshToken, requireAuth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { invalidateToken, getRedis } = require('../services/redis');
 
-// EMAIL TRANSPORTER — force IPv4
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  family: 4,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  tls: { rejectUnauthorized: false },
-  connectionTimeout: 15000,
-  greetingTimeout: 15000,
-  socketTimeout: 15000,
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -34,8 +20,8 @@ const sendOTPEmail = async (email, otp, type = 'register') => {
     ? 'Use the code below to verify your email and complete registration.'
     : 'Use the code below to reset your password.';
 
-  await transporter.sendMail({
-    from: `"Nexus Chat" <${process.env.EMAIL_USER}>`,
+  await resend.emails.send({
+    from: 'Nexus Chat <onboarding@resend.dev>',
     to: email,
     subject,
     html: `
@@ -161,7 +147,7 @@ router.post('/reset-password', asyncHandler(async (req, res) => {
   res.json({ ok: true, message: 'Password reset successfully! Please login.' });
 }));
 
-// REGISTER — now OTP gated
+// REGISTER — OTP gated
 router.post('/register', asyncHandler(async (req, res) => {
   return res.status(400).json({ error: 'Please use /send-otp and /verify-otp to register.' });
 }));
