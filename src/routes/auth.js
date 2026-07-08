@@ -5,22 +5,26 @@ const nodemailer = require('nodemailer');
 const { query } = require('../db/pool');
 const { signToken, signRefreshToken, verifyRefreshToken, requireAuth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { invalidateToken } = require('../services/redis');
-const { getRedis } = require('../services/redis');
+const { invalidateToken, getRedis } = require('../services/redis');
 
-// EMAIL TRANSPORTER
+// EMAIL TRANSPORTER — force IPv4
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  family: 4,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
+  tls: { rejectUnauthorized: false },
+  connectionTimeout: 15000,
+  greetingTimeout: 15000,
+  socketTimeout: 15000,
 });
 
-// GENERATE 6-DIGIT OTP
 const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
 
-// SEND OTP EMAIL
 const sendOTPEmail = async (email, otp, type = 'register') => {
   const subject = type === 'register' ? 'Verify your Nexus account' : 'Reset your Nexus password';
   const title   = type === 'register' ? 'Email Verification' : 'Password Reset';
@@ -33,24 +37,24 @@ const sendOTPEmail = async (email, otp, type = 'register') => {
     to: email,
     subject,
     html: `
-      <div style="font-family: 'IBM Plex Mono', monospace; background: #04060d; padding: 40px; border-radius: 16px; max-width: 480px; margin: 0 auto;">
-        <div style="text-align: center; margin-bottom: 32px;">
-          <div style="display: inline-block; background: linear-gradient(135deg, #00ffe0, #39ff9f); width: 48px; height: 48px; border-radius: 14px; line-height: 48px; font-size: 24px; font-weight: 900; color: #04060d; text-align: center;">N</div>
-          <h1 style="color: #ffffff; font-size: 22px; margin: 16px 0 4px; letter-spacing: -0.5px;">NEXUS<span style="color: #00ffe0;">.</span></h1>
-          <p style="color: rgba(255,255,255,0.4); font-size: 11px; letter-spacing: 3px; text-transform: uppercase; margin: 0;">${title}</p>
+      <div style="font-family:monospace;background:#04060d;padding:40px;border-radius:16px;max-width:480px;margin:0 auto;">
+        <div style="text-align:center;margin-bottom:32px;">
+          <div style="display:inline-block;background:linear-gradient(135deg,#00ffe0,#39ff9f);width:48px;height:48px;border-radius:14px;line-height:48px;font-size:24px;font-weight:900;color:#04060d;text-align:center;">N</div>
+          <h1 style="color:#ffffff;font-size:22px;margin:16px 0 4px;letter-spacing:-0.5px;">NEXUS<span style="color:#00ffe0;">.</span></h1>
+          <p style="color:rgba(255,255,255,0.4);font-size:11px;letter-spacing:3px;text-transform:uppercase;margin:0;">${title}</p>
         </div>
-        <p style="color: rgba(255,255,255,0.6); font-size: 13px; line-height: 1.7; margin-bottom: 32px; text-align: center;">${message}</p>
-        <div style="background: rgba(0,255,224,0.06); border: 1px solid rgba(0,255,224,0.2); border-radius: 14px; padding: 28px; text-align: center; margin-bottom: 32px;">
-          <div style="font-size: 42px; font-weight: 800; letter-spacing: 12px; color: #00ffe0; text-shadow: 0 0 20px rgba(0,255,224,0.5);">${otp}</div>
-          <p style="color: rgba(255,255,255,0.3); font-size: 11px; margin: 12px 0 0; letter-spacing: 1px;">Valid for 10 minutes</p>
+        <p style="color:rgba(255,255,255,0.6);font-size:13px;line-height:1.7;margin-bottom:32px;text-align:center;">${message}</p>
+        <div style="background:rgba(0,255,224,0.06);border:1px solid rgba(0,255,224,0.2);border-radius:14px;padding:28px;text-align:center;margin-bottom:32px;">
+          <div style="font-size:42px;font-weight:800;letter-spacing:12px;color:#00ffe0;">${otp}</div>
+          <p style="color:rgba(255,255,255,0.3);font-size:11px;margin:12px 0 0;">Valid for 10 minutes</p>
         </div>
-        <p style="color: rgba(255,255,255,0.25); font-size: 11px; text-align: center; line-height: 1.6;">If you didn't request this, please ignore this email.<br/>This code expires in 10 minutes.</p>
+        <p style="color:rgba(255,255,255,0.25);font-size:11px;text-align:center;line-height:1.6;">If you didn't request this, ignore this email.<br/>This code expires in 10 minutes.</p>
       </div>
     `,
   });
 };
 
-// ─── SEND OTP FOR REGISTRATION ───────────────────────────────────────────────
+// SEND OTP FOR REGISTRATION
 router.post('/send-otp', asyncHandler(async (req, res) => {
   const { email, username, password, displayName } = req.body;
   if (!username || !email || !password)
@@ -58,7 +62,6 @@ router.post('/send-otp', asyncHandler(async (req, res) => {
   if (password.length < 8)
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-  // Check if email/username already exists
   const { rows: [existing] } = await query(
     'SELECT id FROM users WHERE email=$1 OR username=$2',
     [email.toLowerCase(), username.toLowerCase()]
@@ -67,23 +70,18 @@ router.post('/send-otp', asyncHandler(async (req, res) => {
 
   const otp = generateOTP();
   const redis = getRedis();
-
-  // Store OTP + user data in Redis for 10 minutes
   await redis.setex(
-    `otp:register:${email.toLowerCase()}`,
-    600,
+    `otp:register:${email.toLowerCase()}`, 600,
     JSON.stringify({ otp, username, email, password, displayName })
   );
-
   await sendOTPEmail(email, otp, 'register');
   res.json({ ok: true, message: 'OTP sent to your email' });
 }));
 
-// ─── VERIFY OTP + COMPLETE REGISTRATION ──────────────────────────────────────
+// VERIFY OTP + COMPLETE REGISTRATION
 router.post('/verify-otp', asyncHandler(async (req, res) => {
   const { email, otp } = req.body;
-  if (!email || !otp)
-    return res.status(400).json({ error: 'Email and OTP required' });
+  if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
 
   const redis = getRedis();
   const stored = await redis.get(`otp:register:${email.toLowerCase()}`);
@@ -93,7 +91,6 @@ router.post('/verify-otp', asyncHandler(async (req, res) => {
   if (data.otp !== otp.toString())
     return res.status(400).json({ error: 'Invalid OTP. Please try again.' });
 
-  // OTP verified — delete it and create account
   await redis.del(`otp:register:${email.toLowerCase()}`);
 
   const hash = await bcrypt.hash(data.password, 12);
@@ -120,29 +117,25 @@ router.post('/verify-otp', asyncHandler(async (req, res) => {
   res.status(201).json({ user, accessToken, refreshToken });
 }));
 
-// ─── SEND OTP FOR FORGOT PASSWORD ────────────────────────────────────────────
+// FORGOT PASSWORD — SEND OTP
 router.post('/forgot-password', asyncHandler(async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email required' });
 
   const { rows: [user] } = await query('SELECT id, email FROM users WHERE email=$1', [email.toLowerCase()]);
-  // Always return ok to prevent email enumeration
   if (!user) return res.json({ ok: true, message: 'If this email exists, an OTP has been sent.' });
 
   const otp = generateOTP();
   const redis = getRedis();
-
   await redis.setex(
-    `otp:reset:${email.toLowerCase()}`,
-    600,
+    `otp:reset:${email.toLowerCase()}`, 600,
     JSON.stringify({ otp, userId: user.id })
   );
-
   await sendOTPEmail(email, otp, 'reset');
   res.json({ ok: true, message: 'OTP sent to your email' });
 }));
 
-// ─── VERIFY RESET OTP + SET NEW PASSWORD ─────────────────────────────────────
+// RESET PASSWORD
 router.post('/reset-password', asyncHandler(async (req, res) => {
   const { email, otp, newPassword } = req.body;
   if (!email || !otp || !newPassword)
@@ -166,12 +159,12 @@ router.post('/reset-password', asyncHandler(async (req, res) => {
   res.json({ ok: true, message: 'Password reset successfully! Please login.' });
 }));
 
-// ─── REGISTER (kept for backward compat but now OTP-gated above) ─────────────
+// REGISTER — now OTP gated
 router.post('/register', asyncHandler(async (req, res) => {
   return res.status(400).json({ error: 'Please use /send-otp and /verify-otp to register.' });
 }));
 
-// ─── LOGIN ────────────────────────────────────────────────────────────────────
+// LOGIN
 router.post('/login', asyncHandler(async (req, res) => {
   const { email, password } = req.body;
   if (!email || !password)
@@ -197,7 +190,7 @@ router.post('/login', asyncHandler(async (req, res) => {
   res.json({ user: safeUser, accessToken, refreshToken });
 }));
 
-// ─── REFRESH ──────────────────────────────────────────────────────────────────
+// REFRESH
 router.post('/refresh', asyncHandler(async (req, res) => {
   const { refreshToken } = req.body;
   if (!refreshToken) return res.status(400).json({ error: 'Refresh token required' });
@@ -223,7 +216,7 @@ router.post('/refresh', asyncHandler(async (req, res) => {
   res.json({ accessToken: newAccess, refreshToken: newRefresh });
 }));
 
-// ─── LOGOUT ───────────────────────────────────────────────────────────────────
+// LOGOUT
 router.post('/logout', requireAuth, asyncHandler(async (req, res) => {
   const { refreshToken } = req.body;
   if (refreshToken) {
@@ -236,7 +229,7 @@ router.post('/logout', requireAuth, asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
-// ─── ME ───────────────────────────────────────────────────────────────────────
+// ME
 router.get('/me', requireAuth, asyncHandler(async (req, res) => {
   const { rows: [user] } = await query(
     `SELECT id, username, email, display_name, avatar_url, role, is_online, last_seen, created_at
