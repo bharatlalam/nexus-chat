@@ -9,9 +9,10 @@ const { invalidateToken, getRedis } = require('../services/redis');
 
 // EMAIL TRANSPORTER — force IPv4
 const transporter = nodemailer.createTransport({
-  host: '74.125.133.108',
-  port: 587,
-  secure: false,
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
+  family: 4,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
