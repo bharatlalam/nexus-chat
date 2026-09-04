@@ -4,7 +4,7 @@ const logger = require('../utils/logger');
 
 const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
-const MODEL = 'llama-3.3-70b-versatile';
+const MODEL = process.env.AI_MODEL || 'llama-3.1-8b-instant';
 const MAX_TOKENS = parseInt(process.env.AI_MAX_TOKENS) || 1024;
 
 const SYSTEM_PROMPT = process.env.AI_SYSTEM_PROMPT ||
