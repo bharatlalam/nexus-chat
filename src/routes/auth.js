@@ -3,48 +3,14 @@ dns.setDefaultResultOrder('ipv4first');
 const router = require('express').Router();
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
-const { Resend } = require('resend');
 const { query } = require('../db/pool');
 const { signToken, signRefreshToken, verifyRefreshToken, requireAuth } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { invalidateToken, getRedis } = require('../services/redis');
+const { invalidateToken } = require('../services/redis');
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
-const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
-
-const sendOTPEmail = async (email, otp, type = 'register') => {
-  const subject = type === 'register' ? 'Verify your Nexus account' : 'Reset your Nexus password';
-  const title   = type === 'register' ? 'Email Verification' : 'Password Reset';
-  const message = type === 'register'
-    ? 'Use the code below to verify your email and complete registration.'
-    : 'Use the code below to reset your password.';
-
-  await resend.emails.send({
-    from: 'Nexus Chat <onboarding@resend.dev>',
-    to: email,
-    subject,
-    html: `
-      <div style="font-family:monospace;background:#04060d;padding:40px;border-radius:16px;max-width:480px;margin:0 auto;">
-        <div style="text-align:center;margin-bottom:32px;">
-          <div style="display:inline-block;background:linear-gradient(135deg,#00ffe0,#39ff9f);width:48px;height:48px;border-radius:14px;line-height:48px;font-size:24px;font-weight:900;color:#04060d;text-align:center;">N</div>
-          <h1 style="color:#ffffff;font-size:22px;margin:16px 0 4px;letter-spacing:-0.5px;">NEXUS<span style="color:#00ffe0;">.</span></h1>
-          <p style="color:rgba(255,255,255,0.4);font-size:11px;letter-spacing:3px;text-transform:uppercase;margin:0;">${title}</p>
-        </div>
-        <p style="color:rgba(255,255,255,0.6);font-size:13px;line-height:1.7;margin-bottom:32px;text-align:center;">${message}</p>
-        <div style="background:rgba(0,255,224,0.06);border:1px solid rgba(0,255,224,0.2);border-radius:14px;padding:28px;text-align:center;margin-bottom:32px;">
-          <div style="font-size:42px;font-weight:800;letter-spacing:12px;color:#00ffe0;">${otp}</div>
-          <p style="color:rgba(255,255,255,0.3);font-size:11px;margin:12px 0 0;">Valid for 10 minutes</p>
-        </div>
-        <p style="color:rgba(255,255,255,0.25);font-size:11px;text-align:center;line-height:1.6;">If you didn't request this, ignore this email.<br/>This code expires in 10 minutes.</p>
-      </div>
-    `,
-  });
-};
-
-// SEND OTP FOR REGISTRATION
-router.post('/send-otp', asyncHandler(async (req, res) => {
-  const { email, username, password, displayName } = req.body;
+// REGISTER — simple, no OTP
+router.post('/register', asyncHandler(async (req, res) => {
+  const { username, email, password, displayName } = req.body;
   if (!username || !email || !password)
     return res.status(400).json({ error: 'username, email and password required' });
   if (password.length < 8)
@@ -56,37 +22,12 @@ router.post('/send-otp', asyncHandler(async (req, res) => {
   );
   if (existing) return res.status(400).json({ error: 'Email or username already taken' });
 
-  const otp = generateOTP();
-  const redis = getRedis();
-  await redis.setex(
-    `otp:register:${email.toLowerCase()}`, 600,
-    JSON.stringify({ otp, username, email, password, displayName })
-  );
-  await sendOTPEmail(email, otp, 'register');
-  res.json({ ok: true, message: 'OTP sent to your email' });
-}));
-
-// VERIFY OTP + COMPLETE REGISTRATION
-router.post('/verify-otp', asyncHandler(async (req, res) => {
-  const { email, otp } = req.body;
-  if (!email || !otp) return res.status(400).json({ error: 'Email and OTP required' });
-
-  const redis = getRedis();
-  const stored = await redis.get(`otp:register:${email.toLowerCase()}`);
-  if (!stored) return res.status(400).json({ error: 'OTP expired or not found. Please request a new one.' });
-
-  const data = JSON.parse(stored);
-  if (data.otp !== otp.toString())
-    return res.status(400).json({ error: 'Invalid OTP. Please try again.' });
-
-  await redis.del(`otp:register:${email.toLowerCase()}`);
-
-  const hash = await bcrypt.hash(data.password, 12);
+  const hash = await bcrypt.hash(password, 12);
   const { rows: [user] } = await query(
     `INSERT INTO users (username, email, password_hash, display_name)
      VALUES ($1,$2,$3,$4)
      RETURNING id, username, email, display_name, role, created_at`,
-    [data.username.toLowerCase(), data.email.toLowerCase(), hash, data.displayName || data.username]
+    [username.toLowerCase(), email.toLowerCase(), hash, displayName || username]
   );
 
   const { rows: [general] } = await query("SELECT id FROM rooms WHERE slug='general' LIMIT 1");
@@ -103,53 +44,6 @@ router.post('/verify-otp', asyncHandler(async (req, res) => {
     [user.id, tokenHash]
   );
   res.status(201).json({ user, accessToken, refreshToken });
-}));
-
-// FORGOT PASSWORD — SEND OTP
-router.post('/forgot-password', asyncHandler(async (req, res) => {
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email required' });
-
-  const { rows: [user] } = await query('SELECT id, email FROM users WHERE email=$1', [email.toLowerCase()]);
-  if (!user) return res.json({ ok: true, message: 'If this email exists, an OTP has been sent.' });
-
-  const otp = generateOTP();
-  const redis = getRedis();
-  await redis.setex(
-    `otp:reset:${email.toLowerCase()}`, 600,
-    JSON.stringify({ otp, userId: user.id })
-  );
-  await sendOTPEmail(email, otp, 'reset');
-  res.json({ ok: true, message: 'OTP sent to your email' });
-}));
-
-// RESET PASSWORD
-router.post('/reset-password', asyncHandler(async (req, res) => {
-  const { email, otp, newPassword } = req.body;
-  if (!email || !otp || !newPassword)
-    return res.status(400).json({ error: 'Email, OTP and new password required' });
-  if (newPassword.length < 8)
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
-
-  const redis = getRedis();
-  const stored = await redis.get(`otp:reset:${email.toLowerCase()}`);
-  if (!stored) return res.status(400).json({ error: 'OTP expired or not found. Please request a new one.' });
-
-  const data = JSON.parse(stored);
-  if (data.otp !== otp.toString())
-    return res.status(400).json({ error: 'Invalid OTP. Please try again.' });
-
-  await redis.del(`otp:reset:${email.toLowerCase()}`);
-
-  const hash = await bcrypt.hash(newPassword, 12);
-  await query('UPDATE users SET password_hash=$1 WHERE id=$2', [hash, data.userId]);
-
-  res.json({ ok: true, message: 'Password reset successfully! Please login.' });
-}));
-
-// REGISTER — OTP gated
-router.post('/register', asyncHandler(async (req, res) => {
-  return res.status(400).json({ error: 'Please use /send-otp and /verify-otp to register.' });
 }));
 
 // LOGIN
